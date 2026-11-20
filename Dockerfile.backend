@@ -1,0 +1,43 @@
+# BiasHawk backend , one image, two roles.
+#
+# The `api` service runs Gunicorn; the `worker` service runs the job runner.
+# Same codebase, same build, different entrypoint, chosen in compose.yml.
+#
+# Replaces ten images from the old backend: the API, eight analysis services and
+# the RabbitMQ receiver.
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/app/.cache/huggingface
+
+WORKDIR /app
+
+# Dependencies first so code edits don't invalidate the install layer.
+#
+# torch comes from the CPU wheel index deliberately. On Linux the default PyPI
+# wheel bundles the CUDA runtime , roughly 1.5 GB this image would never use,
+# since the only model left in-process is the reranker, on CPU. Embeddings run
+# on Open WebUI's GPU. The second pip then sees torch as already satisfied and
+# installs everything else from PyPI.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 \
+ && pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ /app/
+COPY docker/api-entrypoint.sh docker/worker-entrypoint.sh /usr/local/bin/
+
+RUN chmod +x /usr/local/bin/api-entrypoint.sh /usr/local/bin/worker-entrypoint.sh \
+ && mkdir -p /app/staticfiles /app/media /app/.cache/huggingface \
+ && useradd --create-home --uid 1000 appuser \
+ && chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8000
+
+# Overridden per service in compose.yml.
+CMD ["/usr/local/bin/api-entrypoint.sh"]

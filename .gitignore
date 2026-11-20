@@ -1,0 +1,26 @@
+# Secrets , .env is local dev, docker.env is compose. Neither is ever committed.
+.env
+docker.env
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# Django runtime artefacts
+backend/staticfiles/
+backend/media/
+db.sqlite3
+
+# Node
+node_modules/
+.next/
+
+# Editors / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+*.ps1

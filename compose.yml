@@ -1,0 +1,102 @@
+# BiasHawk , four containers, two images.
+#
+# The old stack ran fifteen across two repos: a Django API, RabbitMQ, eight
+# analysis workers, an RMQ receiver, three Postgres instances and a frontend.
+#
+# `api` and `worker` are the same image (Dockerfile.backend) with different
+# entrypoints. The eight analysis services are not containers any more , they
+# are job handlers the worker calls in-process.
+#
+# Note there is deliberately no ${VAR} substitution anywhere in this file.
+# Compose would resolve those from .env, which is the local-dev file; every
+# value here comes from docker.env instead.
+
+name: biashawk
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: biashawk-postgres
+    env_file:
+      - docker.env
+    ports:
+      - "5442:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # $$ escapes compose substitution so the shell in the container expands it.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # Serves HTTP and owns schema changes: it migrates before it serves.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: biashawk-backend
+    container_name: biashawk-api
+    command: ["/usr/local/bin/api-entrypoint.sh"]
+    env_file:
+      - docker.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - media:/app/media
+      - hf_cache:/app/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status == 200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  # Runs queued jobs. Same image as `api`, no build block of its own , it waits
+  # for `api` to be healthy, which is also what guarantees migrations have run.
+  worker:
+    image: biashawk-backend
+    container_name: biashawk-worker
+    command: ["/usr/local/bin/worker-entrypoint.sh"]
+    env_file:
+      - docker.env
+    volumes:
+      - media:/app/media
+      # Only the cross-encoder reranker (~90 MB) lives here now , embeddings
+      # moved to Open WebUI's GPU. Cached so it downloads once, not per start.
+      - hf_cache:/app/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Baked into the client bundle at build time. Production overrides this
+        # with the public API hostname.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api
+    container_name: biashawk-frontend
+    # Deliberately no env_file: the frontend reads nothing at runtime, and
+    # docker.env holds the backend's secrets.
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  media:
+  hf_cache:

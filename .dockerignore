@@ -1,0 +1,13 @@
+# Local dev env , containers get their configuration from docker.env instead.
+.env
+
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.py[cod]
+**/node_modules
+**/.next
+**/db.sqlite3
+backend/media
+backend/staticfiles
